@@ -2,8 +2,8 @@
 const CONFIG = {
   gym: 'GRIT Gym',
   whatsapp: '201000000000', // رقم واتساب الجيم بالصيغة الدولية بدون + (مثال مصر: 2010xxxxxxxx)
-  supabaseUrl: '',          // مثال: https://xxxxxxxx.supabase.co
-  supabaseKey: ''           // Publishable / anon key (الـ public مش الـ service_role أبداً)
+  supabaseUrl: 'https://jbabkedjihqhbvcyhghy.supabase.co',          // مثال: https://xxxxxxxx.supabase.co
+  supabaseKey: 'sb_publishable_nIE6qeSyr0YUUj2XdUW1vw_rjfBJ5l7'           // Publishable / anon key (الـ public مش الـ service_role أبداً)
 };
 // =======================================================
 
