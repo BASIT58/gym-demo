@@ -294,3 +294,44 @@ html{-webkit-text-size-adjust:100%}
 }
 @keyframes sheet{from{transform:translateY(100%)}}
 .pricing{overflow-x:clip}
+
+/* ===== backgrounds (moved out of inline styles so CSP can forbid them) ===== */
+.pricing{background-image:linear-gradient(rgba(10,10,10,.7),rgba(10,10,10,.9)),url('images/pricing-bg.webp')}
+.cta{background-image:linear-gradient(rgba(0,0,0,.55),rgba(0,0,0,.75)),url('images/cta-banner.webp')}
+.brand img{width:auto;height:44px}
+.footer img{width:auto;height:40px}
+.privacy{grid-column:1/-1;margin:0;color:var(--muted);font-size:.85rem;text-align:center}
+
+/* ===== touch & mobile polish ===== */
+html{-webkit-tap-highlight-color:transparent}
+button,.btn,a,summary,select{touch-action:manipulation}
+body:has(dialog[open]){overflow:hidden}
+dialog{overscroll-behavior:contain}
+.dlg-close{width:44px;height:44px;top:.4rem;left:.4rem;display:grid;place-items:center}
+.burger{width:44px;height:44px}
+.dots button{position:relative}
+.dots button::after{content:"";position:absolute;inset:-17px -6px}
+.m-cta{display:none}
+@media(hover:none){.btn:hover{transform:none}.gallery figure:hover img{transform:none}.wa-float:hover{transform:none}}
+
+@media(max-width:640px){
+  .brand img{height:34px}
+  input,select,textarea{font-size:16px!important}   /* stops iOS auto-zoom on focus */
+  .wa-float{display:none}
+  .m-cta{display:flex;position:fixed;inset:auto 0 0 0;z-index:45;gap:.6rem;padding:.6rem 4% calc(.6rem + env(safe-area-inset-bottom,0px));
+    background:rgba(12,12,13,.96);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-top:1px solid var(--line);
+    transform:translateY(115%);transition:transform .3s}
+  .m-cta.show{transform:none}
+  .m-cta .btn{flex:1;text-align:center;min-height:46px;padding:.6rem 1rem}
+  .m-cta .btn-wa{flex:0 0 auto;background:#25d366;border-color:#25d366;color:#07210f}
+  .footer{padding-bottom:calc(5.5rem + env(safe-area-inset-bottom,0px))}
+  .plan-in{padding:1.8rem 1.2rem 1.4rem;gap:.7rem}
+  .price{font-size:2.6rem}
+  .plan-in li{font-size:.9rem;padding:.3rem 0}
+  .btn{min-height:46px}
+  blockquote{padding:1.4rem}
+}
+
+/* booking dialog: fields shouldn't stretch in the column layout; arrow on the left for RTL */
+#bookForm .fld{flex:none}
+#bookForm select{background-position:20px 55%,26px 55%;padding-left:2.4rem;padding-right:1.2rem}

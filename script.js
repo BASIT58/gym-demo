@@ -1,3 +1,6 @@
+// Anti-clickjacking (CSP frame-ancestors needs a real HTTP header; this is the fallback)
+if (window.top !== window.self) document.documentElement.style.display = 'none';
+
 // ================== إعدادات (عدّلها) ==================
 const CONFIG = {
   gym: 'GRIT Gym',
@@ -135,106 +138,156 @@ document.getElementById('year').textContent = new Date().getFullYear();
 
 
 // ===== Booking: modal + forms =====
+// SECURITY MODEL: whatever a visitor types is only ever handled as plain text.
+//  1) never inserted with innerHTML (only textContent / DOM nodes / .value)
+//  2) cleaned + validated here, and validated again by database constraints (supabase.sql)
+//  3) sent as JSON (never concatenated into a URL or SQL), WhatsApp text goes through encodeURIComponent
 (() => {
+  const PAGE_LOADED = Date.now();
+  const COOLDOWN_MS = 20000;   // 1 booking per 20s per visitor
+  const MIN_FILL_MS = 2500;    // humans need more than 2.5s to open the page and fill a form
+  let lastSent = 0;
+
+  // ---------- plain-text helpers ----------
+  const INVISIBLE = /[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]/g; // control, zero-width, bidi-override
+  const FORBIDDEN = /[<>{}\[\]`$=;"()\/\\|^~]/;                                                        // never valid inside a person's name
+  const clean = s => String(s ?? '').normalize('NFC').replace(INVISIBLE, '').replace(/\s+/g, ' ').trim();
+  const latinDigits = s => s
+    .replace(/[\u0660-\u0669]/g, d => d.charCodeAt(0) - 0x0660)
+    .replace(/[\u06F0-\u06F9]/g, d => d.charCodeAt(0) - 0x06F0);
+  const normPhone = raw => {
+    let d = latinDigits(clean(raw)).replace(/\D/g, '');
+    if (d.startsWith('0020')) d = d.slice(4);
+    else if (d.startsWith('20') && d.length === 12) d = d.slice(2);
+    if (d.length === 10 && d[0] === '1') d = '0' + d;
+    return d;                                   // canonical: 01xxxxxxxxx
+  };
+  const phoneOk = d => /^01[0125]\d{8}$/.test(d);
+  const nameError = n => n.length < 2 ? 'اكتب اسمك (حرفين على الأقل).'
+    : n.length > 60 ? 'الاسم طويل زيادة.'
+    : FORBIDDEN.test(n) ? 'الاسم فيه رموز مش مسموحة.' : '';
+  const field = (form, n) => form.elements.namedItem(n);   // never form.name (clashes with the form's own property)
+
+  // ---------- plans ----------
   const plansData = [...document.querySelectorAll('.plan .btn[data-plan]')]
     .map(b => ({ name: b.dataset.plan, price: b.dataset.price }));
   const priceOf = n => (plansData.find(p => p.name === n) || {}).price || '';
+  const validPlan = n => (plansData.some(p => p.name === n) || n === 'استشارة') ? n : 'استشارة';
   const waLink = t => `https://wa.me/${CONFIG.whatsapp}?text=${encodeURIComponent(t)}`;
   const bookingText = d => `مرحباً ${CONFIG.gym} 👋\nأنا ${d.name}\nرقمي: ${d.phone}\nعايز أشترك في: ${d.plan}${priceOf(d.plan) ? ' (' + priceOf(d.plan) + ')' : ''}`;
 
-  // fill plan selects
-  const fillSelect = (sel, withConsult) => {
-    sel.innerHTML = plansData.map(p => `<option value="${p.name}">${p.name} - ${p.price}</option>`).join('')
-      + (withConsult ? '<option value="استشارة">مش متأكد، عايز استشارة</option>' : '');
+  const fillSelect = sel => {
+    sel.replaceChildren(
+      ...plansData.map(p => new Option(`${p.name} - ${p.price}`, p.name)),
+      new Option('مش متأكد، عايز استشارة', 'استشارة'));
   };
   const bkSelect = document.getElementById('bkSelect');
   const joinPlan = document.getElementById('joinPlan');
-  fillSelect(bkSelect, true);
-  fillSelect(joinPlan, true);
+  fillSelect(bkSelect); fillSelect(joinPlan);
   joinPlan.value = 'استشارة';
 
-  // honeypot against bots
-  document.querySelectorAll('#joinForm,#bookForm').forEach(f => f.insertAdjacentHTML('beforeend','<input class="hp" name="website" tabindex="-1" autocomplete="off" aria-hidden="true">'));
+  // ---------- honeypot (bots fill every field, humans never see this one) ----------
+  document.querySelectorAll('#joinForm,#bookForm').forEach(f => {
+    const i = document.createElement('input');
+    i.className = 'hp'; i.name = 'website'; i.tabIndex = -1; i.autocomplete = 'off';
+    i.setAttribute('aria-hidden', 'true');
+    f.append(i);
+  });
 
-  // remember visitor
+  // ---------- remember visitor (re-cleaned on read: localStorage can be edited by anyone) ----------
   const store = {
-    get() { try { return JSON.parse(localStorage.getItem('grit_visitor')) || {}; } catch { return {}; } },
+    get() {
+      try {
+        const v = JSON.parse(localStorage.getItem('grit_visitor')) || {};
+        const name = clean(v.name).slice(0, 60), phone = normPhone(v.phone);
+        return { name: nameError(name) ? '' : name, phone: phoneOk(phone) ? phone : '' };
+      } catch { return {}; }
+    },
     set(v) { try { localStorage.setItem('grit_visitor', JSON.stringify(v)); } catch {} }
   };
   const prefill = form => {
-    const v = store.get();
-    if (v.name && !form.name.value) form.name.value = v.name;
-    if (v.phone && !form.phone.value) form.phone.value = v.phone;
+    const v = store.get(), n = field(form, 'name'), p = field(form, 'phone');
+    if (v.name && !n.value) n.value = v.name;
+    if (v.phone && !p.value) p.value = v.phone;
   };
   prefill(document.getElementById('joinForm'));
 
-  // validation
-  const phoneOk = p => /^(\+?20|0)?1[0125]\d{8}$/.test(p.replace(/[\s-]/g, ''));
+  // ---------- validation ----------
   const setErr = (input, text) => {
     input.classList.toggle('invalid', !!text);
+    input.setAttribute('aria-invalid', text ? 'true' : 'false');
     const e = input.closest('label').querySelector('.err');
     if (e) e.textContent = text || '';
   };
   const validate = form => {
-    const name = form.name.value.trim(), phone = form.phone.value.trim();
-    setErr(form.name, name.length < 2 ? 'اكتب اسمك.' : '');
-    setErr(form.phone, phoneOk(phone) ? '' : 'اكتب رقم موبايل مصري صحيح، مثال 01012345678.');
+    const nEl = field(form, 'name'), pEl = field(form, 'phone');
+    const name = clean(nEl.value), phone = normPhone(pEl.value);
+    setErr(nEl, nameError(name));
+    setErr(pEl, phoneOk(phone) ? '' : 'اكتب رقم موبايل مصري صحيح، مثال 01012345678.');
     const bad = form.querySelector('.invalid');
     if (bad) { bad.focus(); return null; }
-    return { name, phone, plan: form.plan.value, hp: form.website ? form.website.value : '' };
+    return { name, phone, plan: validPlan(clean(field(form, 'plan').value)), hp: field(form, 'website').value };
   };
   ['joinForm', 'bookForm'].forEach(id => {
     const f = document.getElementById(id);
-    ['name', 'phone'].forEach(n => f[n].addEventListener('input', () => setErr(f[n], '')));
+    ['name', 'phone'].forEach(n => field(f, n).addEventListener('input', () => setErr(field(f, n), '')));
   });
+  const tooSoon = () => Date.now() - lastSent < COOLDOWN_MS;
+  const waitMsg = 'استنى شوية قبل ما تبعت طلب تاني.';
 
-  // send: opens WhatsApp with ready message + (optional) posts to endpoint
+  // ---------- send ----------
   async function send(data, btn, source) {
     const url = waLink(bookingText(data));
-    window.open(url, '_blank', 'noopener'); // synchronous so browsers don't block it
+    window.open(url, '_blank', 'noopener,noreferrer');   // synchronous so browsers don't block it
     btn.disabled = true; btn.classList.add('loading');
-    if (CONFIG.supabaseUrl && CONFIG.supabaseKey && !data.hp) {
+    const looksLikeBot = !!data.hp || (Date.now() - PAGE_LOADED < MIN_FILL_MS);
+    if (CONFIG.supabaseUrl && CONFIG.supabaseKey && !looksLikeBot) {
       try {
         const headers = { 'Content-Type': 'application/json', 'apikey': CONFIG.supabaseKey, 'Prefer': 'return=minimal' };
         if (CONFIG.supabaseKey.startsWith('eyJ')) headers.Authorization = 'Bearer ' + CONFIG.supabaseKey;
         const res = await fetch(CONFIG.supabaseUrl.replace(/\/$/, '') + '/rest/v1/bookings', {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({ name: data.name, phone: data.phone, plan: data.plan, price: priceOf(data.plan) || null, source: source })
+          method: 'POST', headers,
+          signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(8000) : undefined,
+          body: JSON.stringify({ name: data.name, phone: data.phone, plan: data.plan, price: priceOf(data.plan) || null, source })
         });
-        if (!res.ok) console.error('Supabase error', res.status, await res.text());
-      } catch (err) { console.error('Supabase network error', err); }
+        if (!res.ok) console.error('Supabase error', res.status);
+      } catch (err) { console.error('Supabase network error'); }
     }
+    lastSent = Date.now();
     btn.disabled = false; btn.classList.remove('loading');
     store.set({ name: data.name, phone: data.phone });
     return url;
   }
 
-  // modal
+  // ---------- modal ----------
   const dlg = document.getElementById('bookDialog');
   const formView = document.getElementById('bkFormView');
   const doneView = document.getElementById('bkDone');
   const bookForm = document.getElementById('bookForm');
+  const bkMsg = document.getElementById('bkMsg');
   const setPlanHeader = () => {
-    document.getElementById('bkPlan').textContent = bookForm.plan.value === 'استشارة' ? 'استشارة مجانية' : bookForm.plan.value;
-    document.getElementById('bkPrice').textContent = priceOf(bookForm.plan.value);
+    const v = field(bookForm, 'plan').value;
+    document.getElementById('bkPlan').textContent = v === 'استشارة' ? 'استشارة مجانية' : v;
+    document.getElementById('bkPrice').textContent = priceOf(v);
   };
   function openBooking(plan) {
-    formView.hidden = false; doneView.hidden = true;
-    bookForm.plan.value = plan; setPlanHeader(); prefill(bookForm);
+    formView.hidden = false; doneView.hidden = true; bkMsg.textContent = ''; bkMsg.className = 'msg';
+    field(bookForm, 'plan').value = validPlan(plan); setPlanHeader(); prefill(bookForm);
     dlg.showModal();
-    setTimeout(() => (bookForm.name.value ? bookForm.phone : bookForm.name).focus(), 50);
+    setTimeout(() => (field(bookForm, 'name').value ? field(bookForm, 'phone') : field(bookForm, 'name')).focus(), 50);
   }
   document.querySelectorAll('.plan .btn[data-plan]').forEach(b =>
     b.addEventListener('click', () => openBooking(b.dataset.plan)));
-  bookForm.plan.addEventListener('change', setPlanHeader);
+  field(bookForm, 'plan').addEventListener('change', setPlanHeader);
   document.getElementById('bkClose').addEventListener('click', () => dlg.close());
   document.getElementById('bkOk').addEventListener('click', () => dlg.close());
   dlg.addEventListener('click', e => { if (e.target === dlg) dlg.close(); });
 
   bookForm.addEventListener('submit', async e => {
     e.preventDefault();
+    bkMsg.className = 'msg'; bkMsg.textContent = '';
     const data = validate(bookForm); if (!data) return;
+    if (tooSoon()) { bkMsg.className = 'msg err'; bkMsg.textContent = waitMsg; return; }
     const url = await send(data, bookForm.querySelector('button[type=submit]'), 'modal');
     document.getElementById('bkDoneTitle').textContent = `تمام يا ${data.name}!`;
     document.getElementById('bkDoneText').textContent = `سجّلنا طلبك لباقة ${data.plan}. كمّل الرسالة على واتساب وهنكلمك على ${data.phone}.`;
@@ -242,21 +295,36 @@ document.getElementById('year').textContent = new Date().getFullYear();
     formView.hidden = true; doneView.hidden = false;
   });
 
-  // bottom form
+  // ---------- bottom form ----------
   const joinForm = document.getElementById('joinForm');
   const joinMsg = document.getElementById('formMsg');
   joinForm.addEventListener('submit', async e => {
     e.preventDefault();
     joinMsg.className = 'msg'; joinMsg.textContent = '';
     const data = validate(joinForm); if (!data) return;
+    if (tooSoon()) { joinMsg.className = 'msg err'; joinMsg.textContent = waitMsg; return; }
     const url = await send(data, joinForm.querySelector('button[type=submit]'), 'form');
+    const a = document.createElement('a');
+    a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = 'دوس هنا';
     joinMsg.className = 'msg ok';
-    joinMsg.innerHTML = `تم يا ${data.name}! لو واتساب ماتفتحش <a href="${url}" target="_blank" rel="noopener">دوس هنا</a> وابعت الرسالة.`;
+    joinMsg.replaceChildren(
+      document.createTextNode(`تم يا ${data.name}! لو واتساب ماتفتحش `), a, document.createTextNode(' وابعت الرسالة.'));
   });
 
-  // floating whatsapp
-  document.getElementById('waFloat').href = waLink(`مرحباً ${CONFIG.gym}، عندي استفسار.`);
+  // ---------- whatsapp buttons ----------
+  const generalWa = waLink(`مرحباً ${CONFIG.gym}، عندي استفسار.`);
+  document.getElementById('waFloat').href = generalWa;
+  const mWa = document.getElementById('mWa'); if (mWa) mWa.href = generalWa;
 
-  // smart: hero "احجز حصة تجريبية" scrolls to form and preselects consult
+  // hero "احجز حصة تجريبية" scrolls to form and preselects consult
   document.querySelectorAll('a[href="#join"]').forEach(a => a.addEventListener('click', () => { joinPlan.value = 'استشارة'; }));
+
+  // ---------- mobile sticky bar: show after the hero, hide while the booking form is on screen ----------
+  const mCta = document.getElementById('mCta');
+  if (mCta && 'IntersectionObserver' in window) {
+    let heroSeen = true, joinSeen = false;
+    const upd = () => mCta.classList.toggle('show', !heroSeen && !joinSeen);
+    new IntersectionObserver(en => { heroSeen = en[0].isIntersecting; upd(); }, { threshold: .15 }).observe(document.getElementById('top'));
+    new IntersectionObserver(en => { joinSeen = en[0].isIntersecting; upd(); }, { threshold: .2 }).observe(document.getElementById('join'));
+  }
 })();
