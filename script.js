@@ -2,8 +2,8 @@
 const CONFIG = {
   gym: 'GRIT Gym',
   whatsapp: '201000000000', // رقم واتساب الجيم بالصيغة الدولية بدون + (مثال مصر: 2010xxxxxxxx)
-  supabaseUrl: 'https://jbabkedjihqhbvcyhghy.supabase.co',          // مثال: https://xxxxxxxx.supabase.co
-  supabaseKey: 'sb_publishable_nIE6qeSyr0YUUj2XdUW1vw_rjfBJ5l7'           // Publishable / anon key (الـ public مش الـ service_role أبداً)
+  supabaseUrl: '',          // مثال: https://xxxxxxxx.supabase.co
+  supabaseKey: ''           // Publishable / anon key (الـ public مش الـ service_role أبداً)
 };
 // =======================================================
 
@@ -24,6 +24,14 @@ menu.querySelectorAll('a').forEach(a => a.addEventListener('click', () => {
   menu.classList.remove('open');
   burger.setAttribute('aria-expanded', false);
 }));
+
+// Drawer extras: lock scroll, Esc, click overlay, reset on resize
+const closeMenu = () => { menu.classList.remove('open'); burger.setAttribute('aria-expanded', false); document.body.style.overflow = ''; };
+burger.addEventListener('click', () => { document.body.style.overflow = menu.classList.contains('open') ? 'hidden' : ''; });
+menu.querySelectorAll('a').forEach(a => a.addEventListener('click', closeMenu));
+nav.addEventListener('click', e => { if (e.target === nav) closeMenu(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeMenu(); });
+window.addEventListener('resize', () => { if (innerWidth > 1024) closeMenu(); });
 
 // Counting stats when visible
 const counters = document.querySelectorAll('[data-count]');
